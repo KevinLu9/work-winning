@@ -73,6 +73,7 @@ DATA_SOURCES = [
     {"value": "salesforce", "label": "Salesforce export", "description": "A row from salesforce_synthetic_cut.xlsx, or a person named in it."},
     {"value": "synthetic", "label": "Synthetic", "description": "Generated for the demo. Only columns populated in the export are filled."},
     {"value": "user", "label": "User submitted", "description": "Submitted through this app."},
+    {"value": "public", "label": "Ventia website", "description": "Written from a project page published on ventia.com."},
 ]
 
 
@@ -94,6 +95,10 @@ def meta():
                 bus.add(r[0])
             if r[1]:
                 lobs.add(r[1])
+        # Hand-written content (server/seed/featured.py) can use a service line no opportunity has.
+        for bu, lob in db.execute("SELECT DISTINCT business_unit, service_line FROM content_items WHERE sector = ? AND data_source = 'public'", (s["name"],)):
+            bus.add(bu)
+            lobs.add(lob)
         s["business_units"] = sorted(bus)
         s["service_lines"] = sorted(lobs)
     clients = [r[0] for r in db.execute('SELECT DISTINCT "Opportunity_Parent_Account_Name__c" FROM opportunities WHERE "Opportunity_Parent_Account_Name__c" IS NOT NULL ORDER BY 1')]

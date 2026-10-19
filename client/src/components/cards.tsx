@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom"
 import { MapPin, UserRound } from "lucide-react"
 import { ApprovalBadge, Highlight, OutcomeBadge, PhotoPlaceholder, SectorBadge, Snippet, SourceBadge, TypeBadge, TypeIcon, VisibilityBadge } from "@/components/common"
+import { HeroBanner } from "@/components/media"
 import { money } from "@/lib/format"
 import type { ContentSummary, SearchResult } from "@/lib/types"
 
@@ -60,10 +61,14 @@ export function ResultCard({ r, terms }: { r: SearchResult; terms: string[] }) {
 }
 
 export function ContentCard({ c }: { c: ContentSummary }) {
-  const showPhoto = c.type === "case_study" || c.type === "image"
+  const seed = c.body?.photo_seed ?? c.title.length
   return (
     <Link to={`/content/${c.id}`} className="group flex flex-col overflow-hidden rounded-xl border bg-card shadow-xs transition hover:border-brand-mid/50 hover:shadow-md">
-      {showPhoto && <PhotoPlaceholder seed={c.body?.photo_seed ?? c.title.length} type={c.type} className="h-28" />}
+      {c.type === "case_study" || c.type === "project_profile" ? (
+        <HeroBanner heroId={c.hero_id} seed={seed} type={c.type} className="h-28" />
+      ) : (
+        c.type === "image" && <PhotoPlaceholder seed={seed} type={c.type} className="h-28" />
+      )}
       <div className="flex flex-1 flex-col p-4">
         <div className="mb-2 flex flex-wrap gap-1.5">
           <TypeBadge type={c.type} />

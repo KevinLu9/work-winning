@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
-import { AlertTriangle, Check, CheckCircle2, ChevronLeft, ChevronRight, Globe2, Info, Link2, Lock, Send, Share2 } from "lucide-react"
+import { AlertTriangle, Check, CheckCircle2, ChevronLeft, ChevronRight, Info, Link2, Send } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -10,10 +10,11 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { PageHeader, TypeIcon } from "@/components/common"
+import { MediaPicker, NO_MEDIA, uploadMedia, type MediaFiles } from "@/components/media"
+import { VisibilityPicker } from "@/components/visibility"
 import { api, ApiError, qs } from "@/lib/api"
 import { FLAG_LABELS, TYPE_LABELS, VISIBILITY_LABELS } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -21,6 +22,9 @@ import { useMeta, usePersona } from "@/lib/persona"
 import type { OpportunityRow, Option, Visibility } from "@/lib/types"
 
 const STEPS = ["Type", "Metadata", "Content", "Visibility", "Review"]
+const MEDIA_STEPS = ["Type", "Metadata", "Content", "Media", "Visibility", "Review"]
+// Types with a hero banner, gallery and PDFs. The shareable build has no file storage, so it skips the Media step.
+const MEDIA_TYPES = import.meta.env.VITE_SHARE_DATA ? [] : ["case_study", "project_profile"]
 const UPLOAD_TYPES = ["case_study", "project_profile", "bid_submission", "image", "good_news_story", "template", "capability_statement"]
 
 type BodyField = { key: string; label: string; kind: "text" | "textarea" | "lines" | "number"; placeholder?: string }
@@ -81,6 +85,15 @@ function bucket(v: number | null) {
   return ">$100m"
 }
 
+function mediaSummary(m: MediaFiles) {
+  const parts = [
+    m.hero ? "Hero banner" : "No hero (stock banner)",
+    m.images.length ? `${m.images.length} image${m.images.length > 1 ? "s" : ""}` : "",
+    m.documents.length ? `${m.documents.length} PDF${m.documents.length > 1 ? "s" : ""}` : "",
+  ]
+  return parts.filter(Boolean).join(", ")
+}
+
 function FormField({ label, required, error, children, className }: { label: string; required?: boolean; error?: string; children: ReactNode; className?: string }) {
   return (
     <div className={cn("space-y-1.5", className)}>
@@ -137,12 +150,16 @@ export default function SubmitPage() {
   const { user } = usePersona()
   const [step, setStep] = useState(0)
   const [errors, setErrors] = useState<Record<string, string>>({})
+  const [media, setMedia] = useState<MediaFiles>(NO_MEDIA)
   const [form, setForm] = useState<FormState>({
     type: "", title: "", summary: "", sector: "", business_unit: "", service_line: "", contract_value_range: "", client: "",
     geography: "", confidentiality: "Internal", owner: "", review_date: "", source_opportunity_id: "", body: {},
     visibility: "sector_only", shares: [], restricted_flags: [],
   })
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setForm((f) => ({ ...f, [k]: v }))
+  const withMedia = MEDIA_TYPES.includes(form.type)
+  const steps = withMedia ? MEDIA_STEPS : STEPS
+  const current = steps[step]
 
   useEffect(() => {
     if (user) setForm((f) => ({ ...f, sector: f.sector && user.role === "enterprise_admin" ? f.sector : user.sector, owner: f.owner || user.name }))
@@ -158,12 +175,13 @@ export default function SubmitPage() {
   const { data: similar } = useQuery({
     queryKey: ["similar", form.title],
     queryFn: () => api.get<{ entity_id: string; doc_type: string; title: string; sector: string }[]>(`/content/similar${qs({ title: form.title })}`),
-    enabled: step === 4 && form.title.length > 3,
+    enabled: current === "Review" && form.title.length > 3,
   })
 
   function chooseType(t: string) {
     const months = meta?.content_types.find((c) => c.value === t)?.review_months ?? 12
     setForm((f) => ({ ...f, type: t, review_date: addMonths(months), body: {} }))
+    setMedia(NO_MEDIA)
   }
 
   function linkOpportunity(id: string) {
@@ -184,14 +202,14 @@ export default function SubmitPage() {
 
   const stepErrors = useMemo(() => {
     const e: Record<string, string> = {}
-    if (step === 0 && !form.type) e.type = "Choose a content type"
-    if (step === 1) {
+    if (current === "Type" && !form.type) e.type = "Choose a content type"
+    if (current === "Metadata") {
       for (const k of ["title", "sector", "business_unit", "service_line", "contract_value_range", "client", "geography", "confidentiality", "owner", "review_date"] as const)
         if (!String(form[k]).trim()) e[k] = "Required"
     }
-    if (step === 3 && form.visibility === "shared" && form.shares.length === 0) e.shares = "Select at least one sector"
+    if (current === "Visibility" && form.visibility === "shared" && form.shares.length === 0) e.shares = "Select at least one sector"
     return e
-  }, [step, form])
+  }, [current, form])
 
   function next() {
     setErrors(stepErrors)
@@ -199,17 +217,21 @@ export default function SubmitPage() {
   }
 
   const submit = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const body: Record<string, unknown> = {}
       for (const f of BODY_FIELDS[form.type] ?? []) {
         const v = form.body[f.key]
         if (!v) continue
         body[f.key] = f.kind === "lines" ? v.split("\n").map((s) => s.trim()).filter(Boolean) : f.kind === "number" ? Number(v) : v
       }
-      return api.post<{ id: string }>("/content", { ...form, body, source_opportunity_id: form.source_opportunity_id || null })
+      const r = await api.post<{ id: string }>("/content", { ...form, body, source_opportunity_id: form.source_opportunity_id || null })
+      // The item exists now, so a failed upload is reported but does not undo the submission.
+      const failed = withMedia ? await uploadMedia(r.id, media) : []
+      return { ...r, failed }
     },
     onSuccess: (r) => {
       toast.success("Submitted for approval", { description: `Your ${form.sector} sector administrator has been notified (simulated Teams).` })
+      if (r.failed.length) toast.error(`Could not upload ${r.failed.join(", ")}`, { description: "Add them again from the content page." })
       queryClient.invalidateQueries()
       navigate(`/content/${r.id}`)
     },
@@ -233,8 +255,8 @@ export default function SubmitPage() {
         description="Capture knowledge once and reuse it many times. New content is confidential by default: visible only to your sector until you choose to share it, and it goes to your sector administrator for approval."
       />
 
-      <ol className="mb-6 grid grid-cols-5 gap-2">
-        {STEPS.map((s, i) => (
+      <ol className={cn("mb-6 grid gap-2", steps.length === 6 ? "grid-cols-6" : "grid-cols-5")}>
+        {steps.map((s, i) => (
           <li key={s} className="flex flex-col items-center gap-1.5 text-center sm:flex-row sm:text-left">
             <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-full border text-sm font-semibold",
               i < step ? "border-brand-mid bg-brand-mid text-white" : i === step ? "border-primary bg-primary text-primary-foreground" : "bg-card text-muted-foreground")}>
@@ -247,7 +269,7 @@ export default function SubmitPage() {
 
       <Card>
         <CardContent className="space-y-6 pt-6">
-          {step === 0 && (
+          {current === "Type" && (
             <div>
               <div className="grid gap-3 sm:grid-cols-2">
                 {UPLOAD_TYPES.map((t) => {
@@ -294,7 +316,7 @@ export default function SubmitPage() {
             </div>
           )}
 
-          {step === 1 && (
+          {current === "Metadata" && (
             <div className="space-y-5">
               <div className="rounded-lg border border-dashed bg-muted/40 p-4">
                 <FormField label="Link to a Salesforce opportunity (optional, pre-fills metadata)">
@@ -352,7 +374,7 @@ export default function SubmitPage() {
             </div>
           )}
 
-          {step === 2 && (
+          {current === "Content" && (
             <div className="space-y-4">
               {(BODY_FIELDS[form.type] ?? []).map((f) => (
                 <FormField key={f.key} label={f.label}>
@@ -365,41 +387,18 @@ export default function SubmitPage() {
                   )}
                 </FormField>
               ))}
-              <p className="text-xs text-muted-foreground">Document upload goes to the sector SharePoint library (simulated in this demo).</p>
+              <p className="text-xs text-muted-foreground">
+                {withMedia ? "You can add a hero banner, images and PDF documents in the next step." : "Document upload goes to the sector SharePoint library (simulated in this demo)."}
+              </p>
             </div>
           )}
 
-          {step === 3 && (
+          {current === "Media" && <MediaPicker value={media} onChange={setMedia} />}
+
+          {current === "Visibility" && (
             <div className="space-y-6">
-              <RadioGroup value={form.visibility} onValueChange={(v) => set("visibility", v as Visibility)} className="gap-3">
-                {meta.visibility.map((v) => {
-                  const Icon = v.value === "sector_only" ? Lock : v.value === "shared" ? Share2 : Globe2
-                  return (
-                    <Label key={v.value} htmlFor={`vis-${v.value}`}
-                      className={cn("flex cursor-pointer items-start gap-3 rounded-xl border p-4 font-normal", form.visibility === v.value && "border-primary bg-secondary")}>
-                      <RadioGroupItem id={`vis-${v.value}`} value={v.value} className="mt-1" />
-                      <Icon className="mt-0.5 size-5 text-brand-mid" />
-                      <div>
-                        <div className="font-semibold">{v.label}{v.value === "sector_only" && <span className="ml-2 text-xs font-normal text-muted-foreground">(default)</span>}</div>
-                        <div className="text-sm text-muted-foreground">{v.description}</div>
-                      </div>
-                    </Label>
-                  )
-                })}
-              </RadioGroup>
-              {form.visibility === "shared" && (
-                <FormField label="Share with sectors" required error={errors.shares}>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    {meta.sectors.filter((s) => s.name !== form.sector).map((s) => (
-                      <label key={s.name} className="flex items-center gap-2 text-sm">
-                        <Checkbox checked={form.shares.includes(s.name)}
-                          onCheckedChange={(c) => set("shares", c ? [...form.shares, s.name] : form.shares.filter((x) => x !== s.name))} />
-                        {s.name}
-                      </label>
-                    ))}
-                  </div>
-                </FormField>
-              )}
+              <VisibilityPicker value={{ visibility: form.visibility, shares: form.shares }} sector={form.sector} error={errors.shares}
+                onChange={(v) => setForm((f) => ({ ...f, ...v }))} />
               <div>
                 <Label>Restricted content</Label>
                 <p className="mb-2 text-xs text-muted-foreground">Restricted content is only visible to your sector, whatever visibility you choose above.</p>
@@ -416,7 +415,7 @@ export default function SubmitPage() {
             </div>
           )}
 
-          {step === 4 && (
+          {current === "Review" && (
             <div className="space-y-5">
               <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
                 {[
@@ -425,6 +424,7 @@ export default function SubmitPage() {
                   ["Confidentiality", form.confidentiality], ["Owner", form.owner], ["Review date", form.review_date],
                   ["Visibility", VISIBILITY_LABELS[form.visibility] + (form.visibility === "shared" ? ` → ${form.shares.join(", ")}` : "")],
                   ["Restrictions", form.restricted_flags.map((f) => FLAG_LABELS[f]).join(", ") || "None"],
+                  ...(withMedia ? [["Media", mediaSummary(media)]] : []),
                 ].map(([k, v]) => (
                   <div key={k}><dt className="text-xs text-muted-foreground">{k}</dt><dd className="font-medium">{v}</dd></div>
                 ))}
@@ -450,10 +450,10 @@ export default function SubmitPage() {
 
           <div className="flex justify-between border-t pt-4">
             <Button variant="outline" onClick={() => setStep((s) => s - 1)} disabled={step === 0}><ChevronLeft className="size-4" /> Back</Button>
-            {step < STEPS.length - 1 ? (
+            {step < steps.length - 1 ? (
               <Button onClick={next}>Next <ChevronRight className="size-4" /></Button>
             ) : (
-              <Button onClick={() => submit.mutate()} disabled={submit.isPending}><Send className="size-4" /> Submit for approval</Button>
+              <Button onClick={() => submit.mutate()} disabled={submit.isPending}><Send className="size-4" /> {submit.isPending && withMedia ? "Uploading…" : "Submit for approval"}</Button>
             )}
           </div>
         </CardContent>

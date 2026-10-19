@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react"
 import { Link } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
-import { AlertCircle, CalendarClock, CheckCircle2, ClipboardList, FileWarning, ShieldCheck, ThumbsDown, ThumbsUp, Timer } from "lucide-react"
+import { AlertCircle, ArchiveRestore, CalendarClock, CheckCircle2, ClipboardList, FileWarning, ShieldCheck, ThumbsDown, ThumbsUp, Timer } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -20,7 +20,9 @@ import type { Governance, QueueItem } from "@/lib/types"
 
 interface AuditRow { id: number; ts: string; user_name: string | null; user_sector: string | null; action: string; entity_type: string | null; entity_id: string | null; detail: any }
 
-function Queue({ items, dateKey, actions }: { items: QueueItem[]; dateKey?: "review_date" | "expiry_date"; actions?: (i: QueueItem) => ReactNode }) {
+function Queue({ items, dateKey, actions, linked = true }: {
+  items: QueueItem[]; dateKey?: "review_date" | "expiry_date"; actions?: (i: QueueItem) => ReactNode; linked?: boolean
+}) {
   if (!items.length) return <EmptyState icon={CheckCircle2} title="Nothing in this queue">All clear for this sector.</EmptyState>
   return (
     <div className="overflow-hidden rounded-xl border bg-card">
@@ -38,10 +40,18 @@ function Queue({ items, dateKey, actions }: { items: QueueItem[]; dateKey?: "rev
           {items.map((i) => (
             <TableRow key={i.id}>
               <TableCell className="max-w-md">
-                <Link to={`/content/${i.id}`} className="flex items-start gap-2 font-medium text-primary hover:underline">
-                  <TypeIcon type={i.type} className="mt-0.5 size-4 shrink-0 text-brand-mid" />
-                  <span className="line-clamp-2">{i.title}</span>
-                </Link>
+                {linked ? (
+                  <Link to={`/content/${i.id}`} className="flex items-start gap-2 font-medium text-primary hover:underline">
+                    <TypeIcon type={i.type} className="mt-0.5 size-4 shrink-0 text-brand-mid" />
+                    <span className="line-clamp-2">{i.title}</span>
+                  </Link>
+                ) : (
+                  // Archived content has no page: it is hidden from everyone until restored.
+                  <div className="flex items-start gap-2 font-medium text-muted-foreground">
+                    <TypeIcon type={i.type} className="mt-0.5 size-4 shrink-0" />
+                    <span className="line-clamp-2">{i.title}</span>
+                  </div>
+                )}
                 <div className="mt-0.5 flex gap-1.5 pl-6 text-xs text-muted-foreground">{TYPE_LABELS[i.type]} <SectorBadge sector={i.sector} /></div>
               </TableCell>
               <TableCell className="hidden md:table-cell">{i.owner ?? <span className="text-destructive">Unassigned</span>}</TableCell>
@@ -89,6 +99,15 @@ export default function GovernancePage() {
     onError: (e) => toast.error(e.message),
   })
 
+  const restore = useMutation({
+    mutationFn: (id: string) => api.post(`/content/${id}/restore`),
+    onSuccess: () => {
+      toast.success("Content restored", { description: "It is visible again under its previous visibility settings." })
+      queryClient.invalidateQueries()
+    },
+    onError: (e) => toast.error(e.message),
+  })
+
   if (isLoading || !data || !meta) return <Skeleton className="h-[70vh] rounded-xl" />
 
   const approveActions = data.can_approve
@@ -97,6 +116,13 @@ export default function GovernancePage() {
           <Button size="sm" onClick={() => decide.mutate({ id: i.id, decision: "approve" })}><ThumbsUp className="size-3.5" /><span className="hidden lg:inline">Approve</span></Button>
           <Button size="sm" variant="outline" onClick={() => decide.mutate({ id: i.id, decision: "reject" })}><ThumbsDown className="size-3.5" /></Button>
         </div>
+      )
+    : undefined
+  const restoreActions = data.can_approve
+    ? (i: QueueItem) => (
+        <Button size="sm" variant="outline" onClick={() => restore.mutate(i.id)} disabled={restore.isPending}>
+          <ArchiveRestore className="size-3.5" /> Restore
+        </Button>
       )
     : undefined
   const reviewActions = data.can_approve
@@ -140,6 +166,7 @@ export default function GovernancePage() {
           <TabsTrigger value="expired">Expired <Badge variant="secondary" className="ml-1">{data.expired.length}</Badge></TabsTrigger>
           <TabsTrigger value="incomplete">Incomplete metadata <Badge variant="secondary" className="ml-1">{data.incomplete.length}</Badge></TabsTrigger>
           {data.rejected.length > 0 && <TabsTrigger value="rejected">Rejected <Badge variant="secondary" className="ml-1">{data.rejected.length}</Badge></TabsTrigger>}
+          {data.archived.length > 0 && <TabsTrigger value="archived">Archived <Badge variant="secondary" className="ml-1">{data.archived.length}</Badge></TabsTrigger>}
           {isAdmin && <TabsTrigger value="audit">Audit log</TabsTrigger>}
         </TabsList>
         <TabsContent value="pending" className="mt-4"><Queue items={data.pending} actions={approveActions} /></TabsContent>
@@ -148,6 +175,10 @@ export default function GovernancePage() {
         <TabsContent value="expired" className="mt-4"><Queue items={data.expired} dateKey="expiry_date" /></TabsContent>
         <TabsContent value="incomplete" className="mt-4"><Queue items={data.incomplete} /></TabsContent>
         <TabsContent value="rejected" className="mt-4"><Queue items={data.rejected} /></TabsContent>
+        <TabsContent value="archived" className="mt-4">
+          <p className="mb-3 text-sm text-muted-foreground">Archived content is hidden from everyone, in every sector. Restoring it brings it back as approved, with the visibility it had before.</p>
+          <Queue items={data.archived} actions={restoreActions} linked={false} />
+        </TabsContent>
         {isAdmin && (
           <TabsContent value="audit" className="mt-4">
             <div className="overflow-hidden rounded-xl border bg-card">
@@ -197,6 +228,7 @@ export default function GovernancePage() {
                   <span className={s.overdue ? "text-destructive" : ""}>{s.overdue} overdue</span>
                   <span>{s.pending} pending</span>
                   <span>{s.restricted} restricted</span>
+                  {s.archived > 0 && <span>{s.archived} archived</span>}
                 </div>
                 <div className="flex h-2 overflow-hidden rounded-full bg-muted" title="Visibility mix: sector only / shared / enterprise">
                   {(["sector_only", "shared", "enterprise"] as const).map((v, i) => (

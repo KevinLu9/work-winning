@@ -1,7 +1,7 @@
 export type Visibility = "sector_only" | "shared" | "enterprise"
-export type ApprovalStatus = "approved" | "pending" | "rejected"
+export type ApprovalStatus = "approved" | "pending" | "rejected" | "archived"
 export type OutcomeStatus = "won" | "lost" | "open"
-export type DataSource = "salesforce" | "synthetic" | "user"
+export type DataSource = "salesforce" | "synthetic" | "user" | "public"
 
 export interface User {
   id: string
@@ -72,6 +72,19 @@ export interface ContentSummary {
   data_source: DataSource
   updated_at: string
   body: Record<string, any>
+  hero_id: string | null
+}
+
+export type AttachmentRole = "hero" | "image" | "document"
+
+export interface Attachment {
+  id: string
+  role: AttachmentRole
+  filename: string
+  mime_type: string
+  size: number
+  uploaded_by: string | null
+  uploaded_at: string
 }
 
 export interface ContentDetail extends ContentSummary {
@@ -81,6 +94,7 @@ export interface ContentDetail extends ContentSummary {
   created_by: string | null
   contacts: { id: string; name: string; title: string; primary_sector: string; expertise: string[]; role: string }[]
   versions: { version: number; changed_by: string; changed_at: string; summary: string }[]
+  attachments: Attachment[]
   opportunity: null | {
     id: string; name: string; stage: string; status: string; tcv: number | null; close_date: string
     teamsite: string | null; brs_number: number | null; reasons: string | null; client: string; region: string; source: DataSource
@@ -224,10 +238,11 @@ export interface Governance {
   expired: QueueItem[]
   pending: QueueItem[]
   rejected: QueueItem[]
+  archived: QueueItem[]
   incomplete: QueueItem[]
   roster: (Sector & {
     content_count: number; completeness: number; overdue: number; pending: number
-    visibility: Record<Visibility, number>; restricted: number; no_owner: number
+    visibility: Record<Visibility, number>; restricted: number; no_owner: number; archived: number
   })[]
 }
 

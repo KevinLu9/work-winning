@@ -3,7 +3,9 @@ __pycache__/
 node_modules/
 client/dist/
 data/*.db
+data/uploads/
 .DS_Store
 client/dist-share/
 client/offline-data/
 share/
+salesforce_synthetic*

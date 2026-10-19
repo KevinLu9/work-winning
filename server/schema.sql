@@ -117,6 +117,20 @@ CREATE TABLE content_contacts (
     PRIMARY KEY (content_id, contact_id, role)
 );
 
+-- Uploaded media (hero banner, extra images, PDFs). Files live in the uploads dir, next to the database.
+CREATE TABLE content_attachments (
+    id TEXT PRIMARY KEY,
+    content_id TEXT NOT NULL REFERENCES content_items(id),
+    role TEXT NOT NULL,          -- hero | image | document
+    filename TEXT NOT NULL,      -- original name, shown to users
+    stored_name TEXT NOT NULL,   -- <content_id>/<id>.<ext> under the uploads dir
+    mime_type TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    uploaded_by TEXT,
+    uploaded_at TEXT NOT NULL
+);
+CREATE INDEX idx_attachments_content ON content_attachments(content_id);
+
 CREATE TABLE content_versions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     content_id TEXT NOT NULL REFERENCES content_items(id),

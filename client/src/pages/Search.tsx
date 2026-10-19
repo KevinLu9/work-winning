@@ -28,7 +28,7 @@ const FACET_TITLES: Record<ListKey, string> = {
   source: "Data source",
 }
 const STATUS_LABELS: Record<string, string> = { won: "Won / completed", lost: "Lost", open: "Open / live" }
-const SOURCE_LABELS: Record<string, string> = { salesforce: "Salesforce export", synthetic: "Synthetic", user: "User submitted" }
+const SOURCE_LABELS: Record<string, string> = { salesforce: "Salesforce export", synthetic: "Synthetic", user: "User submitted", public: "Ventia website" }
 const CONTENT_TYPES = ["case_study", "project_profile", "bid_submission", "template", "good_news_story", "capability_statement", "image"]
 const TABS = [
   { value: "all", label: "All" },

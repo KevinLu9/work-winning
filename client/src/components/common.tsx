@@ -1,5 +1,6 @@
 import type { ReactNode } from "react"
 import {
+  Archive,
   Award,
   Briefcase,
   Building2,
@@ -114,9 +115,15 @@ const SOURCE_STYLE: Record<DataSource, { icon: LucideIcon; label: string; cls: s
     cls: "border-sky-200 bg-sky-50 text-sky-900",
     tip: "Submitted through this app",
   },
+  public: {
+    icon: Globe2,
+    label: "Ventia website",
+    cls: "border-emerald-200 bg-emerald-50 text-emerald-900",
+    tip: "Written from a project page published on ventia.com",
+  },
 }
 
-/** Where a record came from: the real Salesforce export, demo generation, or a user submission. */
+/** Where a record came from: the real Salesforce export, demo generation, a user submission, or ventia.com. */
 export function SourceBadge({ source, tip }: { source: DataSource | null | undefined; tip?: string }) {
   if (!source) return null
   const s = SOURCE_STYLE[source]
@@ -161,6 +168,8 @@ export function OutcomeBadge({ status }: { status: OutcomeStatus | null | undefi
 
 export function ApprovalBadge({ status }: { status: ApprovalStatus }) {
   if (status === "approved") return null
+  if (status === "archived")
+    return <Badge variant="outline" className="gap-1 border-muted-foreground/30 bg-muted text-muted-foreground"><Archive className="size-3" />Archived</Badge>
   return (
     <Badge variant="outline" className={cn("gap-1", status === "pending" ? "border-warning bg-warning/30 text-foreground" : "border-destructive/30 text-destructive")}>
       <Clock className="size-3" />

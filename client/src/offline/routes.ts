@@ -138,7 +138,10 @@ const EDITABLE = ["title", "summary", "body", "business_unit", "service_line", "
   "geography", "confidentiality", "visibility", "shares", "restricted_flags", "owner", "review_date", "expiry_date", "tags"]
 const LIST_COLUMNS = "id, type, title, summary, sector, business_unit, service_line, contract_value, contract_value_range, client, " +
   "geography, confidentiality, visibility, restricted_flags, is_restricted, owner, review_date, expiry_date, " +
-  "approval_status, version, source_opportunity_id, data_source, updated_at, body_json"
+  "approval_status, version, source_opportunity_id, data_source, updated_at, body_json, " +
+  "(SELECT a.id FROM content_attachments a WHERE a.content_id = c.id AND a.role = 'hero') AS hero_id"
+// Media files are not bundled into the shareable build (export_offline.py empties the table); the query keeps the response shape.
+const ATTACHMENT_COLUMNS = "id, role, filename, mime_type, size, uploaded_by, uploaded_at"
 
 function getVisible(user: User, id: string) {
   const [sql, params] = contentClause(user)
@@ -202,7 +205,8 @@ function getContent(user: User, id: string) {
   item.shares = all<{ sector: string }>("SELECT sector FROM content_shares WHERE content_id = ?", [id]).map((r) => r.sector)
   item.contacts = rows("SELECT ct.id, ct.name, ct.title, ct.primary_sector, ct.expertise, cc.role FROM content_contacts cc " +
     "JOIN contacts ct ON ct.id = cc.contact_id WHERE cc.content_id = ? ORDER BY cc.role", [id])
-  item.versions = rows("SELECT version, changed_by, changed_at, summary FROM content_versions WHERE content_id = ? ORDER BY version DESC", [id])
+  item.versions = rows("SELECT version, changed_by, changed_at, summary FROM content_versions WHERE content_id = ? ORDER BY version DESC, id DESC", [id])
+  item.attachments = rows(`SELECT ${ATTACHMENT_COLUMNS} FROM content_attachments WHERE content_id = ? ORDER BY role, uploaded_at, id`, [id])
   item.opportunity = null
   if (item.source_opportunity_id) {
     const [oSql, oParams] = opportunityClause(user)
@@ -294,6 +298,45 @@ function approveContent(user: User, id: string, data: Record<string, any>) {
   indexContent(get("SELECT * FROM content_items WHERE id = ?", [id])!)
   audit(user, decision, "content", id, { note: data.note ?? null })
   return { id, approval_status: status, notification: `Teams notification sent to ${item.owner} (simulated)` }
+}
+
+/** Administrator-only change (visibility, archive, restore): a version entry without bumping the version. */
+function adminChange(user: User, item: Record<string, any>, updates: Record<string, unknown>, summary: string, action: string, detail?: unknown) {
+  const all = { ...updates, updated_at: nowIso() }
+  const keys = Object.keys(all)
+  run(`UPDATE content_items SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`, [...keys.map((k) => all[k as keyof typeof all]), item.id])
+  run("INSERT INTO content_versions (content_id, version, changed_by, changed_at, summary) VALUES (?, ?, ?, ?, ?)",
+    [item.id, item.version, user.name, nowIso(), summary])
+  indexContent(get("SELECT * FROM content_items WHERE id = ?", [item.id])!)
+  audit(user, action, "content", item.id, detail)
+}
+
+function changeVisibility(user: User, id: string, body: Record<string, any>) {
+  const item = getVisible(user, id)
+  if (!canApprove(user, item.sector)) throw new ApiError(403, "Only the sector administrator can change visibility")
+  const data = { visibility: body?.visibility, shares: ((body?.shares ?? []) as string[]).filter((s) => s !== item.sector) }
+  if (!data.visibility) throw new ApiError(400, "Validation failed", { visibility: "Required" })
+  validate(data, true)
+  writeLinks(id, data)
+  const label = ({ sector_only: "Sector only", shared: `Shared with ${data.shares.join(", ")}`, enterprise: "Enterprise" } as Record<string, string>)[data.visibility]
+  adminChange(user, item, { visibility: data.visibility }, `Visibility changed to ${label}`, "visibility",
+    { from: item.visibility, to: data.visibility, shares: data.shares })
+  return { id, visibility: data.visibility, shares: data.visibility === "shared" ? data.shares : [] }
+}
+
+function archiveContent(user: User, id: string) {
+  const item = getVisible(user, id) // archived items are not visible, so archiving twice is a 404
+  if (!canApprove(user, item.sector)) throw new ApiError(403, "Only the sector administrator can archive content")
+  adminChange(user, item, { approval_status: "archived" }, "Archived - hidden from everyone", "archive", { previous_status: item.approval_status })
+  return { id, approval_status: "archived" }
+}
+
+function restoreContent(user: User, id: string) {
+  // Archived content is outside contentClause, so look it up directly; only its sector admin may see it here.
+  const item = get("SELECT * FROM content_items WHERE id = ? AND approval_status = 'archived'", [id])
+  if (!item || !canApprove(user, item.sector)) throw notFound()
+  adminChange(user, item, { approval_status: "approved" }, "Restored from archive", "restore")
+  return { id, approval_status: "approved" }
 }
 
 function markReviewed(user: User, id: string) {
@@ -518,21 +561,24 @@ function governance(user: User, q: URLSearchParams) {
   const today = todayIso()
   // Governance queues are scoped to the viewer's sector; Enterprise Admins see every sector.
   const scope = isEnterpriseAdmin(user) ? q.get("sector") : user.sector
-  const [where, params]: [string, unknown[]] = scope ? ["sector = ?", [scope]] : ["1 = 1", []]
-  const queue = (extra: string, extraParams: unknown[] = [], order = "review_date") =>
-    rows(`SELECT ${QUEUE_COLS} FROM content_items WHERE ${where} AND ${extra} ORDER BY ${order} LIMIT 100`, [...params, ...extraParams])
+  const [scoped, params]: [string, unknown[]] = scope ? ["sector = ?", [scope]] : ["1 = 1", []]
+  // Archived content only appears in the archived queue; every other queue and stat ignores it.
+  const where = `${scoped} AND approval_status != 'archived'`
+  const queue = (extra: string, extraParams: unknown[] = [], order = "review_date", base = where) =>
+    rows(`SELECT ${QUEUE_COLS} FROM content_items WHERE ${base} AND ${extra} ORDER BY ${order} LIMIT 100`, [...params, ...extraParams])
 
   const roster = rows<Record<string, any>>("SELECT * FROM sectors ORDER BY name").map((s) => {
     const st = get<Record<string, number | null>>(
       `SELECT COUNT(*) AS n, SUM(${MANDATORY_SQL}) AS complete, SUM(review_date < ?) AS overdue, SUM(approval_status = 'pending') AS pending, ` +
       `SUM(visibility = 'sector_only') AS so, SUM(visibility = 'shared') AS sh, SUM(visibility = 'enterprise') AS en, SUM(is_restricted) AS restricted, ` +
-      `SUM(COALESCE(owner, '') = '') AS no_owner FROM content_items WHERE sector = ?`, [today, s.name])!
+      `SUM(COALESCE(owner, '') = '') AS no_owner FROM content_items WHERE sector = ? AND approval_status != 'archived'`, [today, s.name])!
+    const archived = value<number>("SELECT COUNT(*) FROM content_items WHERE sector = ? AND approval_status = 'archived'", [s.name])
     const n = st.n ?? 0
     return {
       ...s, content_count: n, completeness: n ? round(((st.complete ?? 0) / n) * 100, 1) : 100,
       overdue: st.overdue ?? 0, pending: st.pending ?? 0,
       visibility: { sector_only: st.so ?? 0, shared: st.sh ?? 0, enterprise: st.en ?? 0 },
-      restricted: st.restricted ?? 0, no_owner: st.no_owner ?? 0,
+      restricted: st.restricted ?? 0, no_owner: st.no_owner ?? 0, archived,
     }
   })
   const incomplete = rows(`SELECT ${QUEUE_COLS}, business_unit, geography, service_line, client FROM content_items ` +
@@ -544,6 +590,7 @@ function governance(user: User, q: URLSearchParams) {
     expired: queue("expiry_date < ?", [today], "expiry_date"),
     pending: queue("approval_status = 'pending'", [], "updated_at DESC"),
     rejected: queue("approval_status = 'rejected'", [], "updated_at DESC"),
+    archived: queue("approval_status = 'archived'", [], "updated_at DESC", scoped),
     incomplete, roster,
   }
 }
@@ -579,6 +626,9 @@ const ROUTES: [string, RegExp, Handler][] = [
   ["PATCH", /^\/content\/([^/]+)$/, (u, m, q, b) => updateContent(u, m[1], b, q)],
   ["POST", /^\/content\/([^/]+)\/approve$/, (u, m, _q, b) => approveContent(u, m[1], b)],
   ["POST", /^\/content\/([^/]+)\/review$/, (u, m) => markReviewed(u, m[1])],
+  ["POST", /^\/content\/([^/]+)\/visibility$/, (u, m, _q, b) => changeVisibility(u, m[1], b)],
+  ["POST", /^\/content\/([^/]+)\/archive$/, (u, m) => archiveContent(u, m[1])],
+  ["POST", /^\/content\/([^/]+)\/restore$/, (u, m) => restoreContent(u, m[1])],
   ["GET", /^\/opportunities$/, (u, _m, q) => listOpportunities(u, q)],
   ["GET", /^\/opportunities\/stats$/, (u, _m, q) => opportunityStats(u, q)],
   ["GET", /^\/opportunities\/([^/]+)$/, (u, m) => getOpportunity(u, m[1])],

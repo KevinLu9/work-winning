@@ -18,6 +18,7 @@ import math
 import os
 import random
 import re
+import shutil
 import sqlite3
 import sys
 import uuid
@@ -28,11 +29,15 @@ import openpyxl
 
 from server.app.indexing import index_contact, index_content, index_opportunity
 from server.seed import catalog as C
+from server.seed import media
+from server.seed.featured import FEATURED, MEDIA_DIR
 from server.seed.field_meta import DATE_FIELDS, DATETIME_FIELDS, PEOPLE_FIELDS, build_field_meta
 
 ROOT = Path(__file__).resolve().parents[2]
 XLSX = ROOT / "salesforce_synthetic_cut.xlsx"
 DB_PATH = Path(os.environ.get("OWWH_DB", ROOT / "data" / "owwh.db"))
+# Same default as the Flask app: uploaded media lives next to the database.
+UPLOADS = Path(os.environ.get("OWWH_UPLOADS", DB_PATH.parent / "uploads"))
 SCHEMA = ROOT / "server" / "schema.sql"
 SYNTHETIC_COUNT = 142
 TODAY = dt.date.today()
@@ -688,6 +693,67 @@ def sector_content(sector, sector_meta, opps_in_sector):
 
 
 # ---------------------------------------------------------------- main
+def featured_content(f):
+    """A hand-written case study from server/seed/featured.py, shaped like the generated ones."""
+    sm = SECTOR_BY_NAME[f["sector"]]
+    review = add_months(TODAY, C.CONTENT_REVIEW_MONTHS["case_study"])
+    return {
+        "id": f["id"], "type": "case_study", "title": f["title"], "summary": f["summary"], "body_json": json.dumps(f["body"]),
+        "sector": f["sector"], "business_unit": f["business_unit"], "service_line": f["service_line"],
+        "contract_value": None, "contract_value_range": "Not applicable", "client": f["client"], "geography": f["geography"],
+        "confidentiality": "Public", "visibility": "enterprise", "restricted_flags": "[]", "is_restricted": 0,
+        "owner": sm["content_owner"], "review_date": iso(review), "expiry_date": None, "approval_status": "approved",
+        "version": 1, "source_opportunity_id": None, "tags": json.dumps(f["tags"]),
+        "created_by": None, "created_at": f["created_at"], "updated_at": f["updated_at"],
+        "_shares": [], "data_source": "public", "_media": f.get("media", []),
+    }
+
+
+def seed_media(db, content):
+    """Photos for hand-written featured items, plus gallery images and a PDF fact sheet for about a third of generated case studies and project profiles.
+    No hero banners: items without an uploaded hero fall back to client/public/heroes.
+    Uses its own RNG so adding media does not shift the rest of the seeded data."""
+    mrng = random.Random(4242)
+
+    def attach(c, role, filename, mime, data, n):
+        att_id = f"at-{c['id']}-{n}"
+        stored = f"{c['id']}/{att_id}.{filename.rsplit('.', 1)[-1]}"
+        (UPLOADS / stored).parent.mkdir(parents=True, exist_ok=True)
+        (UPLOADS / stored).write_bytes(data)
+        db.execute("INSERT INTO content_attachments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                   (att_id, c["id"], role, filename, stored, mime, len(data), c["owner"], c["created_at"]))
+
+    for c in content:
+        # Hand-written items bring their own photos (server/seed/featured_media).
+        for n, (role, filename) in enumerate(c.get("_media", [])):
+            src = MEDIA_DIR / c["id"].removeprefix("ca-") / filename
+            attach(c, role, filename, "image/png" if filename.endswith(".png") else "image/jpeg", src.read_bytes(), n)
+        if c["type"] not in ("case_study", "project_profile") or c["data_source"] != "synthetic":
+            continue
+        body = json.loads(c["body_json"])
+        seed = body.get("photo_seed") or mrng.randint(1, 9999)
+        name = slug(c["title"])[:40].rstrip("-")
+        if mrng.random() >= 0.35:
+            continue
+        captions = ["Crew on site", "Asset handover", "Night works", "Site inspection", "Completed works"]
+        for i, cap in enumerate(mrng.sample(captions, mrng.randint(2, 3)), 1):
+            attach(c, "image", f"{name}-{slug(cap)}.svg", "image/svg+xml",
+                   media.gallery_svg(seed + i * 101, f"{cap} - {c['client']}"), i)
+        value = f"${c['contract_value'] / 1e6:,.1f}m" if c["contract_value"] else c["contract_value_range"] or "n/a"
+        facts = [f"Client: {c['client']}", f"Sector: {c['sector']}", f"Service line: {c['service_line'] or 'n/a'}",
+                 f"Region: {c['geography'] or 'n/a'}", f"Contract value: {value}"]
+        if body.get("duration_months"):
+            facts.append(f"Duration: {body['duration_months']} months")
+        sections = [("Project facts", facts)]
+        if c["type"] == "case_study":
+            sections += [("The challenge", [body.get("challenge") or ""]), ("Our solution", [body.get("solution") or ""]),
+                         ("Outcomes", [f"- {o}" for o in body.get("outcomes") or []])]
+        else:
+            sections += [("Project description", [body.get("description") or ""]),
+                         ("Services delivered", [f"- {s}" for s in body.get("services_delivered") or []])]
+        attach(c, "document", f"{name}-fact-sheet.pdf", "application/pdf", media.fact_sheet_pdf(c["title"], sections), 9)
+
+
 def synthetic_requested() -> bool:
     parser = argparse.ArgumentParser(description="Build data/owwh.db from salesforce_synthetic_cut.xlsx")
     parser.add_argument("--synthetic", action="store_true", help="also generate synthetic opportunities and content")
@@ -714,6 +780,7 @@ def main(synthetic: bool):
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     if DB_PATH.exists():
         DB_PATH.unlink()
+    shutil.rmtree(UPLOADS, ignore_errors=True)  # media rows go with the database, so do their files
     db = sqlite3.connect(DB_PATH)
     db.row_factory = sqlite3.Row
 
@@ -795,6 +862,10 @@ def main(synthetic: bool):
             c["business_unit"] = None if rng.random() < 0.5 else c["business_unit"]
             c["geography"] = None if c["business_unit"] else c["geography"]
 
+        content += [featured_content(f) for f in FEATURED]
+
+    for c in content:
+        c.setdefault("data_source", "synthetic")
     ccols = [k for k in content[0] if not k.startswith("_")] if content else []
     for c in content:
         db.execute(f"INSERT INTO content_items ({', '.join(ccols)}) VALUES ({', '.join('?' for _ in ccols)})", [c[k] for k in ccols])
@@ -816,6 +887,8 @@ def main(synthetic: bool):
                         "Initial publication" if v == 1 else rng.choice(["Updated outcomes and metrics", "Annual review - no changes",
                                                                           "Refreshed photos and reference contact", "Metadata corrected"])))
 
+    seed_media(db, content)
+
     # Search index
     for c in content:
         index_content(db, c)
@@ -830,7 +903,7 @@ def main(synthetic: bool):
     db.commit()
 
     counts = {t: db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in
-              ["opportunities", "sf_field_meta", "contacts", "content_items", "content_shares", "content_contacts", "search_docs"]}
+              ["opportunities", "sf_field_meta", "contacts", "content_items", "content_shares", "content_contacts", "content_attachments", "search_docs"]}
     by_type = dict(db.execute("SELECT type, COUNT(*) FROM content_items GROUP BY type").fetchall())
     mode = "real + synthetic" if synthetic else "real data only (add --synthetic for demo data)"
     print(f"Seeded {DB_PATH.relative_to(ROOT) if DB_PATH.is_relative_to(ROOT) else DB_PATH} [{mode}]: {len(real)} real + {len(generated)} synthetic opportunities "

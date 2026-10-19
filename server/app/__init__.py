@@ -9,6 +9,8 @@ ROOT = Path(__file__).resolve().parents[2]
 def create_app():
     app = Flask(__name__, static_folder=None)
     app.config["DATABASE"] = os.environ.get("OWWH_DB", str(ROOT / "data" / "owwh.db"))
+    app.config["UPLOADS"] = os.environ.get("OWWH_UPLOADS", str(Path(app.config["DATABASE"]).parent / "uploads"))
+    app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
     app.json.sort_keys = False
 
     from . import db
@@ -25,6 +27,10 @@ def create_app():
     @app.errorhandler(403)
     def forbidden(e):
         return jsonify(error=getattr(e, "description", "Forbidden")), 403
+
+    @app.errorhandler(413)
+    def too_large(e):
+        return jsonify(error="File is larger than 25 MB"), 413
 
     @app.errorhandler(400)
     def bad_request(e):

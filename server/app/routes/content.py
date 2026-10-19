@@ -1,8 +1,10 @@
 import datetime as dt
 import json
 import uuid
+from pathlib import Path
 
-from flask import Blueprint, abort, jsonify, request
+from flask import Blueprint, abort, current_app, jsonify, request, send_file
+from werkzeug.utils import secure_filename
 
 from ...seed import catalog as C
 from ..auth import current_user
@@ -22,7 +24,12 @@ TYPE_VALUES = {t["value"] for t in CONTENT_TYPES}
 FLAG_VALUES = {f["value"] for f in RESTRICTED_FLAGS}
 LIST_COLUMNS = ("id, type, title, summary, sector, business_unit, service_line, contract_value, contract_value_range, client, "
                 "geography, confidentiality, visibility, restricted_flags, is_restricted, owner, review_date, expiry_date, "
-                "approval_status, version, source_opportunity_id, data_source, updated_at, body_json")
+                "approval_status, version, source_opportunity_id, data_source, updated_at, body_json, "
+                "(SELECT a.id FROM content_attachments a WHERE a.content_id = c.id AND a.role = 'hero') AS hero_id")
+ATTACHMENT_COLUMNS = "id, role, filename, mime_type, size, uploaded_by, uploaded_at"
+IMAGE_TYPES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp", "gif": "image/gif"}
+# SVG is deliberately not accepted from users (it can carry script); seeded demo media may be SVG.
+ALLOWED_UPLOADS = {"hero": IMAGE_TYPES, "image": IMAGE_TYPES, "document": {"pdf": "application/pdf"}}
 
 
 def _get_visible(db, user, content_id):
@@ -107,7 +114,8 @@ def get_content(content_id):
     item["contacts"] = rows(db.execute(
         "SELECT ct.id, ct.name, ct.title, ct.primary_sector, ct.expertise, cc.role FROM content_contacts cc "
         "JOIN contacts ct ON ct.id = cc.contact_id WHERE cc.content_id = ? ORDER BY cc.role", (content_id,)))
-    item["versions"] = rows(db.execute("SELECT version, changed_by, changed_at, summary FROM content_versions WHERE content_id = ? ORDER BY version DESC", (content_id,)))
+    item["versions"] = rows(db.execute("SELECT version, changed_by, changed_at, summary FROM content_versions WHERE content_id = ? ORDER BY version DESC, id DESC", (content_id,)))
+    item["attachments"] = rows(db.execute(f"SELECT {ATTACHMENT_COLUMNS} FROM content_attachments WHERE content_id = ? ORDER BY role, uploaded_at, id", (content_id,)))
     item["opportunity"] = None
     if item["source_opportunity_id"]:
         o_sql, o_params = opportunity_clause(user)
@@ -223,6 +231,58 @@ def approve_content(content_id):
                    notification=f"Teams notification sent to {item['owner']} (simulated)")
 
 
+def _admin_change(db, user, item, updates, summary, action, detail=None):
+    """Apply an administrator-only change (visibility, archive, restore): log a version entry without bumping the version."""
+    updates = updates | {"updated_at": now_iso()}
+    db.execute(f"UPDATE content_items SET {', '.join(f'{k} = ?' for k in updates)} WHERE id = ?", list(updates.values()) + [item["id"]])
+    db.execute("INSERT INTO content_versions (content_id, version, changed_by, changed_at, summary) VALUES (?, ?, ?, ?, ?)",
+               (item["id"], item["version"], user["name"], now_iso(), summary))
+    index_content(db, dict(db.execute("SELECT * FROM content_items WHERE id = ?", (item["id"],)).fetchone()))
+    db.commit()
+    audit(user, action, "content", item["id"], detail)
+
+
+@bp.post("/content/<content_id>/visibility")
+def change_visibility(content_id):
+    db, user = get_db(), current_user()
+    item = _get_visible(db, user, content_id)
+    if not can_approve(user, item["sector"]):
+        abort(403, "Only the sector administrator can change visibility")
+    data = request.get_json(silent=True) or {}
+    data = {"visibility": data.get("visibility"), "shares": [s for s in data.get("shares") or [] if s != item["sector"]]}
+    if not data["visibility"]:
+        return jsonify(error="Validation failed", fields={"visibility": "Required"}), 400
+    if (err := _validate(data, partial=True)) is not None:
+        return err
+    _write_links(db, content_id, data)
+    label = {"sector_only": "Sector only", "shared": f"Shared with {', '.join(data['shares'])}", "enterprise": "Enterprise"}[data["visibility"]]
+    _admin_change(db, user, item, {"visibility": data["visibility"]}, f"Visibility changed to {label}", "visibility",
+                  {"from": item["visibility"], "to": data["visibility"], "shares": data["shares"]})
+    return jsonify(id=content_id, visibility=data["visibility"], shares=data["shares"] if data["visibility"] == "shared" else [])
+
+
+@bp.post("/content/<content_id>/archive")
+def archive_content(content_id):
+    db, user = get_db(), current_user()
+    item = _get_visible(db, user, content_id)  # archived items are not visible, so archiving twice is a 404
+    if not can_approve(user, item["sector"]):
+        abort(403, "Only the sector administrator can archive content")
+    _admin_change(db, user, item, {"approval_status": "archived"}, "Archived - hidden from everyone", "archive",
+                  {"previous_status": item["approval_status"]})
+    return jsonify(id=content_id, approval_status="archived")
+
+
+@bp.post("/content/<content_id>/restore")
+def restore_content(content_id):
+    db, user = get_db(), current_user()
+    # Archived content is outside content_clause, so look it up directly; only its sector admin may see it here.
+    item = db.execute("SELECT * FROM content_items WHERE id = ? AND approval_status = 'archived'", (content_id,)).fetchone()
+    if not item or not can_approve(user, item["sector"]):
+        abort(404)
+    _admin_change(db, user, item, {"approval_status": "approved"}, "Restored from archive", "restore")
+    return jsonify(id=content_id, approval_status="approved")
+
+
 @bp.post("/content/<content_id>/review")
 def mark_reviewed(content_id):
     db, user = get_db(), current_user()
@@ -239,3 +299,76 @@ def mark_reviewed(content_id):
     db.commit()
     audit(user, "review", "content", content_id, {"next_review": next_review})
     return jsonify(id=content_id, review_date=next_review)
+
+
+def _uploads_dir() -> Path:
+    return Path(current_app.config["UPLOADS"])
+
+
+def _remove_attachment(db, att):
+    db.execute("DELETE FROM content_attachments WHERE id = ?", (att["id"],))
+    (_uploads_dir() / att["stored_name"]).unlink(missing_ok=True)
+
+
+@bp.post("/content/<content_id>/attachments")
+def upload_attachment(content_id):
+    db, user = get_db(), current_user()
+    item = _get_visible(db, user, content_id)
+    if not can_edit(user, item):
+        abort(403, "Only the originating sector can add media to this content")
+    role, file = request.form.get("role", "image"), request.files.get("file")
+    if role not in ALLOWED_UPLOADS:
+        abort(400, "role must be hero, image or document")
+    if not file or not file.filename:
+        abort(400, "Choose a file to upload")
+    filename = secure_filename(file.filename) or "upload"
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    allowed = ALLOWED_UPLOADS[role]
+    if ext not in allowed or file.mimetype != allowed[ext]:
+        kinds = "PDF files" if role == "document" else "PNG, JPG, WebP or GIF images"
+        abort(400, f"{file.filename}: only {kinds} can be uploaded here")
+    if role == "hero":
+        for old in db.execute("SELECT * FROM content_attachments WHERE content_id = ? AND role = 'hero'", (content_id,)).fetchall():
+            _remove_attachment(db, old)
+    att_id = f"at-{uuid.uuid4().hex[:12]}"
+    stored = f"{content_id}/{att_id}.{ext}"
+    dest = _uploads_dir() / stored
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    file.save(dest)
+    db.execute("INSERT INTO content_attachments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+               (att_id, content_id, role, file.filename, stored, allowed[ext], dest.stat().st_size, user["name"], now_iso()))
+    db.commit()
+    audit(user, "attach", "content", content_id, {"attachment": att_id, "role": role, "filename": file.filename})
+    return jsonify(row_to_dict(db.execute(f"SELECT {ATTACHMENT_COLUMNS} FROM content_attachments WHERE id = ?", (att_id,)).fetchone())), 201
+
+
+@bp.delete("/content/<content_id>/attachments/<att_id>")
+def delete_attachment(content_id, att_id):
+    db, user = get_db(), current_user()
+    item = _get_visible(db, user, content_id)
+    if not can_edit(user, item):
+        abort(403, "Only the originating sector can remove media from this content")
+    att = db.execute("SELECT * FROM content_attachments WHERE id = ? AND content_id = ?", (att_id, content_id)).fetchone()
+    if not att:
+        abort(404)
+    _remove_attachment(db, att)
+    db.commit()
+    audit(user, "detach", "content", content_id, {"attachment": att_id, "filename": att["filename"]})
+    return jsonify(id=att_id, deleted=True)
+
+
+@bp.get("/uploads/<att_id>")
+def serve_attachment(att_id):
+    """The file behind an attachment, under the same visibility rules as its content item.
+    <img> tags cannot send X-OWWH-User, so the client passes the persona as ?as=."""
+    db, user = get_db(), current_user()
+    sql, params = content_clause(user)
+    att = db.execute(f"SELECT a.* FROM content_attachments a JOIN content_items c ON c.id = a.content_id WHERE a.id = ? AND {sql}",
+                     [att_id] + params).fetchone()
+    path = _uploads_dir() / att["stored_name"] if att else None
+    if not path or not path.is_file():
+        abort(404)
+    resp = send_file(path, mimetype=att["mime_type"], download_name=att["filename"],
+                     as_attachment=request.args.get("download") == "1", max_age=3600)
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp

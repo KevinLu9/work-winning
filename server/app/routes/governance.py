@@ -19,10 +19,12 @@ def governance():
     today = dt.date.today().isoformat()
     # Governance queues are scoped to the viewer's sector; Enterprise Admins see every sector.
     scope = request.args.get("sector") if is_enterprise_admin(user) else user["sector"]
-    where, params = ("sector = ?", [scope]) if scope else ("1 = 1", [])
+    scoped, params = ("sector = ?", [scope]) if scope else ("1 = 1", [])
+    # Archived content only appears in the archived queue; every other queue and stat ignores it.
+    where = f"{scoped} AND approval_status != 'archived'"
 
-    def q(extra, extra_params=(), order="review_date"):
-        return rows(db.execute(f"SELECT {QUEUE_COLS} FROM content_items WHERE {where} AND {extra} ORDER BY {order} LIMIT 100",
+    def q(extra, extra_params=(), order="review_date", base=where):
+        return rows(db.execute(f"SELECT {QUEUE_COLS} FROM content_items WHERE {base} AND {extra} ORDER BY {order} LIMIT 100",
                                params + list(extra_params)))
 
     roster = []
@@ -30,12 +32,13 @@ def governance():
         stats = db.execute(
             f"SELECT COUNT(*), SUM({MANDATORY_SQL}), SUM(review_date < ?), SUM(approval_status = 'pending'), "
             f"SUM(visibility = 'sector_only'), SUM(visibility = 'shared'), SUM(visibility = 'enterprise'), SUM(is_restricted), "
-            f"SUM(COALESCE(owner, '') = '') FROM content_items WHERE sector = ?", (today, s["name"])).fetchone()
+            f"SUM(COALESCE(owner, '') = '') FROM content_items WHERE sector = ? AND approval_status != 'archived'", (today, s["name"])).fetchone()
+        archived = db.execute("SELECT COUNT(*) FROM content_items WHERE sector = ? AND approval_status = 'archived'", (s["name"],)).fetchone()[0]
         roster.append(s | {
             "content_count": stats[0], "completeness": round((stats[1] or 0) / stats[0] * 100, 1) if stats[0] else 100,
             "overdue": stats[2] or 0, "pending": stats[3] or 0,
             "visibility": {"sector_only": stats[4] or 0, "shared": stats[5] or 0, "enterprise": stats[6] or 0},
-            "restricted": stats[7] or 0, "no_owner": stats[8] or 0,
+            "restricted": stats[7] or 0, "no_owner": stats[8] or 0, "archived": archived,
         })
     incomplete = rows(db.execute(f"SELECT {QUEUE_COLS}, business_unit, geography, service_line, client FROM content_items "
                                  f"WHERE {where} AND NOT ({MANDATORY_SQL}) LIMIT 50", params))
@@ -46,6 +49,7 @@ def governance():
         expired=q("expiry_date < ?", [today], "expiry_date"),
         pending=q("approval_status = 'pending'", order="updated_at DESC"),
         rejected=q("approval_status = 'rejected'", order="updated_at DESC"),
+        archived=q("approval_status = 'archived'", order="updated_at DESC", base=scoped),
         incomplete=incomplete, roster=roster,
     )
 

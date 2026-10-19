@@ -12,11 +12,12 @@ export const isEnterpriseAdmin = (user: User) => user.role === "enterprise_admin
 
 export function contentClause(user: User, alias = "c", idExpr?: string): [string, unknown[]] {
   const id = idExpr ?? `${alias}.id`
-  if (isEnterpriseAdmin(user)) return ["1 = 1", []]
+  // Archived content is hidden from everyone, Enterprise Admins included (see permissions.py).
+  if (isEnterpriseAdmin(user)) return [`${alias}.approval_status != 'archived'`, []]
   return [
-    `(${alias}.sector = ? OR (${alias}.is_restricted = 0 AND ${alias}.approval_status = 'approved' AND ` +
+    `(${alias}.approval_status != 'archived' AND (${alias}.sector = ? OR (${alias}.is_restricted = 0 AND ${alias}.approval_status = 'approved' AND ` +
       `(${alias}.visibility = 'enterprise' OR (${alias}.visibility = 'shared' AND EXISTS ` +
-      `(SELECT 1 FROM content_shares cs WHERE cs.content_id = ${id} AND cs.sector = ?)))))`,
+      `(SELECT 1 FROM content_shares cs WHERE cs.content_id = ${id} AND cs.sector = ?))))))`,
     [user.sector, user.sector],
   ]
 }

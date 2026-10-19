@@ -4,7 +4,7 @@
  * Changes (submissions, approvals) last until the page is closed.
  */
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm"
-import { bootstrap, dbGzipBase64 } from "virtual:owwh-offline-data"
+import { bootstrap, dbGzipBase64, files } from "virtual:owwh-offline-data"
 import { setDb, type WasmDb } from "./sql"
 import { handle, setBootstrap, type Bootstrap } from "./routes"
 
@@ -28,6 +28,23 @@ async function init() {
     capi.SQLITE_DESERIALIZE_FREEONCLOSE | capi.SQLITE_DESERIALIZE_RESIZEABLE))
   setDb(db as unknown as WasmDb)
   setBootstrap(bootstrap as Bootstrap)
+}
+
+const fileUrls = new Map<string, string>()
+
+/** A blob: URL for a bundled file (attachment id or public path). Blob, not data:, URLs so PDFs can open in a new tab. */
+export function offlineFileUrl(key: string): string | null {
+  const f = files[key]
+  if (!f) return null
+  let url = fileUrls.get(key)
+  if (!url) {
+    const bin = atob(f.b64)
+    const bytes = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+    url = URL.createObjectURL(new Blob([bytes], { type: f.mime }))
+    fileUrls.set(key, url)
+  }
+  return url
 }
 
 export async function offlineRequest(method: string, path: string, body: unknown, userId: string): Promise<unknown> {

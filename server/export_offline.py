@@ -5,10 +5,13 @@ Writes to client/offline-data/:
                   default; with --synthetic it also contains the generated demo data
   bootstrap.json  the /api/meta response plus backend constants the in-browser API needs,
                   so they are defined once in Python and not duplicated in TypeScript
+  media.json      every content attachment (hero banners, gallery images, PDFs) as base64, keyed
+                  by attachment id, so the page can show them without a server
 
 Run: .venv/bin/python -m server.export_offline [--synthetic]
 """
 import argparse
+import base64
 import gzip
 import json
 import os
@@ -39,6 +42,9 @@ def main():
         con = sqlite3.connect(db_path)
         con.execute("DELETE FROM audit_log")
         con.commit()
+        # The seed writes media next to the database (see UPLOADS in server/seed/seed.py).
+        media = {att_id: {"mime": mime, "b64": base64.b64encode((Path(tmp) / "uploads" / stored).read_bytes()).decode()}
+                 for att_id, stored, mime in con.execute("SELECT id, stored_name, mime_type FROM content_attachments")}
         con.execute("VACUUM")
         con.close()
 
@@ -66,8 +72,10 @@ def main():
         raw = db_path.read_bytes()
         (OUT / "owwh.db.gz").write_bytes(gzip.compress(raw, compresslevel=9))
         (OUT / "bootstrap.json").write_text(json.dumps(bootstrap, indent=1))
+        (OUT / "media.json").write_text(json.dumps(media))
         print(f"Exported {OUT.relative_to(ROOT)}: database {len(raw) // 1024} KB "
-              f"→ {(OUT / 'owwh.db.gz').stat().st_size // 1024} KB gzipped, mode={bootstrap['mode']}")
+              f"→ {(OUT / 'owwh.db.gz').stat().st_size // 1024} KB gzipped, media {len(media)} files "
+              f"{(OUT / 'media.json').stat().st_size // 1024} KB, mode={bootstrap['mode']}")
 
 
 if __name__ == "__main__":

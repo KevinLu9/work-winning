@@ -1,8 +1,9 @@
-import type { ReactNode } from "react"
+import { useState, type ReactNode } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import {
+  Archive,
   ArrowLeft,
   Briefcase,
   CalendarCheck,
@@ -12,6 +13,7 @@ import {
   Lock,
   MapPin,
   Quote,
+  Share2,
   ThumbsDown,
   ThumbsUp,
   UserRound,
@@ -20,6 +22,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -35,8 +38,10 @@ import {
   TypeIcon,
   VisibilityBadge,
 } from "@/components/common"
+import { HeroBanner, MediaPanel } from "@/components/media"
+import { VisibilityPicker, type VisibilityValue } from "@/components/visibility"
 import { api, ApiError } from "@/lib/api"
-import { date, daysFromToday, money, relativeDays, TYPE_LABELS } from "@/lib/format"
+import { date, daysFromToday, money, relativeDays, TYPE_LABELS, VISIBILITY_LABELS } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { ContentDetail } from "@/lib/types"
 
@@ -71,6 +76,11 @@ function Body({ item }: { item: ContentDetail }) {
           <Section title="The challenge">{b.challenge}</Section>
           <Section title="Our solution">{b.solution}</Section>
           {b.outcomes?.length > 0 && <Section title="Outcomes"><List items={b.outcomes} /></Section>}
+          {b.source_url && (
+            <a href={b.source_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm text-brand-mid hover:underline">
+              <ExternalLink className="size-3.5" /> Read the published project page
+            </a>
+          )}
           {b.reference_contact && (
             <Section title="Client reference">
               <div className="flex items-start gap-3 rounded-lg border bg-muted/40 p-3">
@@ -177,6 +187,91 @@ function Body({ item }: { item: ContentDetail }) {
   }
 }
 
+/** Sector admin (and Enterprise Admin) controls: change who can see the item, or archive it for everyone. */
+function AdminActions({ item }: { item: ContentDetail }) {
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const [visOpen, setVisOpen] = useState(false)
+  const [archiveOpen, setArchiveOpen] = useState(false)
+  const [vis, setVis] = useState<VisibilityValue>({ visibility: item.visibility, shares: item.shares })
+  const [error, setError] = useState<string>()
+
+  const changeVisibility = useMutation({
+    mutationFn: () => api.post<{ visibility: string }>(`/content/${item.id}/visibility`, vis),
+    onSuccess: (r) => {
+      toast.success("Visibility updated", { description: VISIBILITY_LABELS[r.visibility] })
+      setVisOpen(false)
+      queryClient.invalidateQueries()
+    },
+    onError: (e) => {
+      if (e instanceof ApiError && e.fields) setError(e.fields.shares ?? e.fields.visibility)
+      else toast.error(e.message)
+    },
+  })
+  const archive = useMutation({
+    mutationFn: () => api.post(`/content/${item.id}/archive`),
+    onSuccess: () => {
+      toast.success("Content archived", { description: "Restore it from Governance → Archived." })
+      queryClient.invalidateQueries()
+      navigate("/governance")
+    },
+    onError: (e) => toast.error(e.message),
+  })
+
+  function openVisibility() {
+    setVis({ visibility: item.visibility, shares: item.shares })
+    setError(undefined)
+    setVisOpen(true)
+  }
+
+  return (
+    <div className="space-y-2 border-t pt-3">
+      <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Administrator</div>
+      <div className="grid grid-cols-2 gap-2">
+        <Button size="sm" variant="outline" onClick={openVisibility}><Share2 className="size-4" /> Visibility</Button>
+        <Button size="sm" variant="outline" className="text-destructive hover:text-destructive" onClick={() => setArchiveOpen(true)}>
+          <Archive className="size-4" /> Archive
+        </Button>
+      </div>
+
+      <Dialog open={visOpen} onOpenChange={setVisOpen}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Change visibility</DialogTitle>
+            <DialogDescription>Choose who can find and open this {TYPE_LABELS[item.type].toLowerCase()} outside {item.sector}.</DialogDescription>
+          </DialogHeader>
+          <VisibilityPicker value={vis} onChange={(v) => { setVis(v); setError(undefined) }} sector={item.sector} error={error} />
+          {item.restricted_flags.length > 0 && (
+            <p className="rounded-lg border border-warning bg-warning/20 p-3 text-sm">
+              This item has restricted content, so it stays visible to {item.sector} only, whatever you choose here.
+            </p>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setVisOpen(false)}>Cancel</Button>
+            <Button onClick={() => changeVisibility.mutate()} disabled={changeVisibility.isPending}>Save visibility</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={archiveOpen} onOpenChange={setArchiveOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Archive this content?</DialogTitle>
+            <DialogDescription>
+              "{item.title}" will be hidden from everyone, in every sector: search, the library, related content and its files.
+              You can restore it later from Governance → Archived.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setArchiveOpen(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={() => archive.mutate()} disabled={archive.isPending}><Archive className="size-4" /> Archive</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
 export default function ContentDetailPage() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -210,7 +305,8 @@ export default function ContentDetailPage() {
 
   const reviewDays = daysFromToday(item.review_date)
   const expired = (daysFromToday(item.expiry_date) ?? 1) < 0
-  const showHero = item.type === "case_study"
+  const hasMedia = item.type === "case_study" || item.type === "project_profile"
+  const hero = item.attachments.find((a) => a.role === "hero")
 
   return (
     <div className="space-y-6">
@@ -234,7 +330,7 @@ export default function ContentDetailPage() {
       )}
 
       <div className="overflow-hidden rounded-2xl border bg-card">
-        {showHero && <PhotoPlaceholder seed={item.body?.photo_seed} type={item.type} className="h-40 sm:h-56" />}
+        {hasMedia && <HeroBanner heroId={hero?.id} seed={item.body?.photo_seed ?? item.title.length} type={item.type} className="h-48 sm:h-72" />}
         <div className="p-5 sm:p-8">
           <div className="mb-3 flex flex-wrap gap-1.5">
             <TypeBadge type={item.type} />
@@ -260,11 +356,21 @@ export default function ContentDetailPage() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
-        <Card>
-          <CardContent className="pt-6">
-            <Body item={item} />
-          </CardContent>
-        </Card>
+        <div className="min-w-0 space-y-6">
+          <Card>
+            <CardContent className="pt-6">
+              <Body item={item} />
+            </CardContent>
+          </Card>
+          {hasMedia && (
+            <Card>
+              <CardContent className="pt-6">
+                {/* The shareable build has no file storage, so it never offers uploads. */}
+                <MediaPanel contentId={item.id} attachments={item.attachments} canEdit={item.permissions.can_edit && !import.meta.env.VITE_SHARE_DATA} />
+              </CardContent>
+            </Card>
+          )}
+        </div>
 
         <div className="space-y-4">
           <Card>
@@ -300,6 +406,7 @@ export default function ContentDetailPage() {
                   <CalendarCheck className="size-4" /> Mark as reviewed
                 </Button>
               )}
+              {item.permissions.can_approve && <AdminActions item={item} />}
             </CardContent>
           </Card>
 

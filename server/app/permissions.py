@@ -4,6 +4,9 @@ must include one of these clauses.
 Content is visible when the viewer is an Enterprise Admin, or it originates in the viewer's
 sector, or it is approved, carries no restricted flags, and is either Enterprise-wide or
 Shared with the viewer's sector.
+
+Archived content (approval_status = 'archived') is hidden from everyone, Enterprise Admins included;
+it is only listed in the Governance archive, where an administrator can restore it.
 """
 
 
@@ -14,11 +17,11 @@ def is_enterprise_admin(user) -> bool:
 def content_clause(user, alias="c", id_expr=None):
     id_expr = id_expr or f"{alias}.id"
     if is_enterprise_admin(user):
-        return "1 = 1", []
+        return f"{alias}.approval_status != 'archived'", []
     sql = (
-        f"({alias}.sector = ? OR ({alias}.is_restricted = 0 AND {alias}.approval_status = 'approved' AND "
+        f"({alias}.approval_status != 'archived' AND ({alias}.sector = ? OR ({alias}.is_restricted = 0 AND {alias}.approval_status = 'approved' AND "
         f"({alias}.visibility = 'enterprise' OR ({alias}.visibility = 'shared' AND EXISTS "
-        f"(SELECT 1 FROM content_shares cs WHERE cs.content_id = {id_expr} AND cs.sector = ?)))))"
+        f"(SELECT 1 FROM content_shares cs WHERE cs.content_id = {id_expr} AND cs.sector = ?))))))"
     )
     return sql, [user["sector"], user["sector"]]
 
