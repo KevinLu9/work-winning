@@ -12,6 +12,9 @@
     "dev:api": ".venv/bin/flask --app server.app run --debug --port 5001",
     "dev:web": "npm --prefix client run dev",
     "build": "npm --prefix client run build",
+    "build:share": "node scripts/build-share.mjs",
+    "build:share:synthetic": "node scripts/build-share.mjs --synthetic",
+    "test:parity": "node scripts/test-parity.mjs",
     "start": "npm run build && .venv/bin/gunicorn -w 2 -b 0.0.0.0:8000 'server.app:create_app()'"
   },
   "devDependencies": {

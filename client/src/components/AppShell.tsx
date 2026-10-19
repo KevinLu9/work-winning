@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { cn } from "@/lib/utils"
+import ventiaLogo from "@/assets/ventia-logo.webp"
 import { ROLE_LABELS, SECTOR_SHORT } from "@/lib/format"
 import { useMeta, usePersona } from "@/lib/persona"
 
@@ -46,7 +47,7 @@ function initials(name: string) {
 function Brand() {
   return (
     <Link to="/" className="flex flex-col gap-3 px-2" aria-label="One Work Winning Hub home">
-      <img src="/ventia-logo.webp" alt="Ventia" width={1879} height={850} className="-ml-2 h-16 w-auto self-start" />
+      <img src={ventiaLogo} alt="Ventia" width={1879} height={850} className="-ml-2 h-16 w-auto self-start" />
       <div className="border-l-2 border-sidebar-primary pl-2.5 leading-tight">
         <div className="font-serif text-lg font-semibold text-white">One Work Winning Hub</div>
         <div className="text-[11px] uppercase tracking-wider text-sidebar-foreground/70">Enterprise knowledge</div>
@@ -85,7 +86,9 @@ function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
       <Brand />
       <NavLinks onNavigate={onNavigate} />
       <div className="mt-auto rounded-lg border border-sidebar-border bg-sidebar-accent/40 p-3 text-xs text-sidebar-foreground/80">
-        <div className="mb-1 font-semibold text-white">Demo environment</div>
+        <div className="mb-1 font-semibold text-white">{import.meta.env.MODE === "share" ? "Shared demo (offline)" : "Demo environment"}</div>
+        {import.meta.env.MODE === "share" &&
+          `Runs entirely in this file with ${import.meta.env.VITE_SHARE_DATA === "synthetic" ? "synthetic demo data" : "only the real Salesforce export"}; changes you make last until you close it. `}
         SharePoint and Entra ID are simulated. Only 8 opportunities come from the Salesforce export; badges mark which records are real and which are synthetic. Switch persona (top right) to see how sector-first permissions change results.
       </div>
     </div>

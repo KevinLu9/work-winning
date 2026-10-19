@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react"
-import { useNavigate } from "react-router-dom"
+import { Link, useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import { AlertTriangle, Check, CheckCircle2, ChevronLeft, ChevronRight, Globe2, Info, Link2, Lock, Send, Share2 } from "lucide-react"
@@ -437,7 +437,7 @@ export default function SubmitPage() {
                     <ul className="mt-1 space-y-1">
                       {similar.map((s) => (
                         <li key={s.entity_id}>
-                          <a href={`/content/${s.entity_id}`} target="_blank" rel="noreferrer" className="text-brand-mid hover:underline">{s.title}</a>{" "}
+                          <Link to={`/content/${s.entity_id}`} className="text-brand-mid hover:underline">{s.title}</Link>{" "}
                           <span className="text-xs">({TYPE_LABELS[s.doc_type]}, {s.sector})</span>
                         </li>
                       ))}

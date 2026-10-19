@@ -833,7 +833,7 @@ def main(synthetic: bool):
               ["opportunities", "sf_field_meta", "contacts", "content_items", "content_shares", "content_contacts", "search_docs"]}
     by_type = dict(db.execute("SELECT type, COUNT(*) FROM content_items GROUP BY type").fetchall())
     mode = "real + synthetic" if synthetic else "real data only (add --synthetic for demo data)"
-    print(f"Seeded {DB_PATH.relative_to(ROOT)} [{mode}]: {len(real)} real + {len(generated)} synthetic opportunities "
+    print(f"Seeded {DB_PATH.relative_to(ROOT) if DB_PATH.is_relative_to(ROOT) else DB_PATH} [{mode}]: {len(real)} real + {len(generated)} synthetic opportunities "
           f"({len(header)} Salesforce columns)")
     for k, v in counts.items():
         print(f"  {k:22} {v}")

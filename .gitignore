@@ -4,3 +4,6 @@ node_modules/
 client/dist/
 data/*.db
 .DS_Store
+client/dist-share/
+client/offline-data/
+share/

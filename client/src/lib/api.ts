@@ -1,3 +1,6 @@
+import { offlineRequest } from "@offline"
+import { ApiError } from "./errors"
+
 const PERSONA_KEY = "owwh.persona"
 export const DEFAULT_PERSONA = "u-transport-bm"
 
@@ -17,17 +20,14 @@ export function setPersona(id: string) {
   }
 }
 
-export class ApiError extends Error {
-  status: number
-  fields?: Record<string, string>
-  constructor(status: number, message: string, fields?: Record<string, string>) {
-    super(message)
-    this.status = status
-    this.fields = fields
-  }
-}
+export { ApiError }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  if (offlineRequest) {
+    // Shareable single-file build: answer from the in-browser database instead of Flask.
+    const body = typeof init.body === "string" ? JSON.parse(init.body) : undefined
+    return (await offlineRequest(init.method ?? "GET", path, body, getPersona())) as T
+  }
   const res = await fetch(`/api${path}`, {
     ...init,
     headers: { "Content-Type": "application/json", "X-OWWH-User": getPersona(), ...(init.headers || {}) },

@@ -112,7 +112,9 @@ export default function HomePage() {
         {stats && stats.recent.length === 0 ? (
           <EmptyState icon={BookOpen} title="No content yet">
             Only the Salesforce export is loaded. <Link to="/submit" className="text-brand-mid hover:underline">Submit the first case study</Link>,
-            or run <code>npm run seed:synthetic</code> to load demo content.
+            {import.meta.env.MODE === "share"
+              ? "This shared file contains no generated demo content."
+              : <>or run <code>npm run seed:synthetic</code> to load demo content.</>}
           </EmptyState>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

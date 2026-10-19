@@ -32,6 +32,9 @@ Open http://localhost:5173.
 | `npm run dev` | Run `flask --debug` (port 5001) and the Vite dev server (port 5173) together; Vite proxies `/api` to Flask |
 | `npm run build` | Type-check and build the React app into `client/dist` |
 | `npm start` | Build, then serve the app and the API with **gunicorn** on http://localhost:8000 |
+| `npm run build:share` | Build **`share/owwh-real.html`**, a single self-contained file with only the real Salesforce export, which you can email (see below) |
+| `npm run build:share --synthetic` | Build **`share/owwh-synthetic.html`**, the same but with synthetic demo data (alias: `npm run build:share:synthetic`) |
+| `npm run test:parity` | Check that the in-browser API used by the shareable file returns the same results as the Flask API |
 
 ## Architecture
 
@@ -73,6 +76,27 @@ Open http://localhost:5173.
         └── pages/            # Home, Search, Library, ContentDetail, Opportunities,
                               # OpportunityDetail, Contacts, ContactDetail, Submit, Governance
 ```
+
+## Sharing a single HTML file
+
+```bash
+npm run build:share               # → share/owwh-real.html       real Salesforce export only (~2.6 MB)
+npm run build:share --synthetic   # → share/owwh-synthetic.html  real + synthetic demo data (~3 MB, ~1.2 MB zipped)
+```
+
+Each command creates one HTML file that contains the whole app and its dataset. The data options match `npm run seed`: real data by default, and generated demo data only with `--synthetic`. The file name and the sidebar note show which dataset a file contains. Recipients open it in Chrome, Edge, Firefox or Safari. It needs no install, server or network connection; fonts fall back to system fonts when offline.
+
+How it works:
+
+1. `server/export_offline.py` builds the database (with `--synthetic` if requested), compresses it, and exports the `/api/meta` response and backend constants to `client/offline-data/`.
+2. `vite build --mode share` inlines all JavaScript, CSS, the logo, the SQLite WebAssembly engine and the compressed database into one file (`vite-plugin-singlefile`).
+3. In the page, `client/src/offline/` opens the database in memory and answers the app's API calls with the same SQL as the Flask routes. URLs use `#/…` so the file works when opened from disk.
+
+Search, filters, persona switching, permissions and submissions all work. Changes last until the page is closed, and every recipient starts from the same data.
+
+`client/src/offline/routes.ts` and `search.ts` are a TypeScript port of the Flask routes. **If you change an API route, update the port too** and run `npm run test:parity`. It replays 57 requests (reads, permission denials, validation errors, and a submit → approve → review → edit flow) against both versions on the same database and fails on any difference.
+
+Some email systems (often Outlook) block `.html` attachments. If yours does, zip the file or share it from OneDrive/SharePoint.
 
 ## Data
 
