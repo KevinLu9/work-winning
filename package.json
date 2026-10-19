@@ -1,0 +1,20 @@
+{
+  "name": "one-work-winning-hub",
+  "private": true,
+  "version": "0.1.0",
+  "description": "OWWH demo: Flask + SQLite API with a React (Vite, Tailwind, shadcn/ui) frontend",
+  "scripts": {
+    "setup": "python3 -m venv .venv && .venv/bin/pip install -r server/requirements.txt && npm install && npm --prefix client install && npm run seed",
+    "setup:synthetic": "npm run setup --synthetic",
+    "seed": ".venv/bin/python -m server.seed.seed",
+    "seed:synthetic": ".venv/bin/python -m server.seed.seed --synthetic",
+    "dev": "concurrently -k -n api,web -c green,cyan \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": ".venv/bin/flask --app server.app run --debug --port 5001",
+    "dev:web": "npm --prefix client run dev",
+    "build": "npm --prefix client run build",
+    "start": "npm run build && .venv/bin/gunicorn -w 2 -b 0.0.0.0:8000 'server.app:create_app()'"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.5"
+  }
+}

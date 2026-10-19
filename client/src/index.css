@@ -1,0 +1,116 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Ventia brand palette (BRAND.md) */
+:root {
+  --ventia-deep-green: #004825;
+  --ventia-mid-green: #00994d;
+  --ventia-feijoa-green: #a0cd60;
+  --ventia-safety-yellow: #f5e646;
+  --ventia-red-earth: #9e3323;
+  --ventia-plum-purple: #671c32;
+
+  --radius: 0.625rem;
+  --background: #f7f8f5;
+  --foreground: #14211a;
+  --card: #ffffff;
+  --card-foreground: #14211a;
+  --popover: #ffffff;
+  --popover-foreground: #14211a;
+  --primary: var(--ventia-deep-green);
+  --primary-foreground: #ffffff;
+  --secondary: #e6f2ea;
+  --secondary-foreground: var(--ventia-deep-green);
+  --muted: #eef1ec;
+  --muted-foreground: #5b6b61;
+  --accent: #e3f0d2;
+  --accent-foreground: var(--ventia-deep-green);
+  --destructive: var(--ventia-red-earth);
+  --border: #dde3dc;
+  --input: #d3dbd2;
+  --ring: var(--ventia-mid-green);
+
+  --success: var(--ventia-feijoa-green);
+  --warning: var(--ventia-safety-yellow);
+  --info: var(--ventia-plum-purple);
+  --brand-mid: var(--ventia-mid-green);
+
+  /* Charts: primary greens lead, secondary colours support */
+  --chart-1: var(--ventia-deep-green);
+  --chart-2: var(--ventia-mid-green);
+  --chart-3: var(--ventia-feijoa-green);
+  --chart-4: var(--ventia-plum-purple);
+  --chart-5: var(--ventia-red-earth);
+  --chart-6: #c9b800;
+
+  --sidebar: var(--ventia-deep-green);
+  --sidebar-foreground: #e9f3ec;
+  --sidebar-primary: var(--ventia-feijoa-green);
+  --sidebar-primary-foreground: var(--ventia-deep-green);
+  --sidebar-accent: #0b5a33;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #125c37;
+  --sidebar-ring: var(--ventia-feijoa-green);
+}
+
+@theme inline {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Source Serif 4", Georgia, serif;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --color-brand-mid: var(--brand-mid);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+  h1, h2, h3, .font-display {
+    font-family: var(--font-serif);
+    letter-spacing: -0.01em;
+  }
+  mark {
+    @apply bg-success/40 text-foreground rounded-sm px-0.5;
+  }
+}
